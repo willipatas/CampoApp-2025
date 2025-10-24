@@ -1,0 +1,9 @@
+﻿# deps & build
+node_modules/
+dist/
+coverage/
+
+# env/secrets
+.env
+*.env
+.env.*
