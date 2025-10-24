@@ -7,3 +7,9 @@ coverage/
 .env
 *.env
 .env.*
+
+# OS metadata
+desktop.ini
+
+# Git backups
+.git_bak_*/
