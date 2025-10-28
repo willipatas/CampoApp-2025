@@ -1,8 +1,4 @@
-// src/db.ts
-import dotenv from 'dotenv';
 import { Pool } from 'pg';
-
-dotenv.config();
 
 const pool = new Pool({
   user: process.env.DB_USER,
@@ -12,5 +8,4 @@ const pool = new Pool({
   database: process.env.DB_NAME,
 });
 
-// Export único: reutilizamos SIEMPRE el mismo pool
 export default pool;

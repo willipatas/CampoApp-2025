@@ -8,9 +8,10 @@ import pool from './db';
 
 import authRoutes from './routes/auth.routes';
 import usuariosRoutes from './routes/usuarios.routes';
-import fincasRoutes from './routes/fincas.routes';           // CRUD fincas
-import fincaRolesRoutes from './routes/fincas.roles.routes'; // /:id/miembros
+import fincasRoutes from './routes/fincas.routes';
+import fincaRolesRoutes from './routes/fincas.roles.routes';
 import semovientesRoutes from './routes/semovientes.routes';
+import movimientosRoutes from './routes/movimientos.routes'; 
 
 const app = express();
 
@@ -23,9 +24,10 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 /* ===== Rutas ===== */
 app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', usuariosRoutes);
-app.use('/api/fincas', fincasRoutes);      // CRUD de fincas
-app.use('/api/fincas', fincaRolesRoutes);  // miembros por finca
+app.use('/api/fincas', fincasRoutes);
+app.use('/api/fincas', fincaRolesRoutes);
 app.use('/api/semovientes', semovientesRoutes);
+app.use('/api', movimientosRoutes); // 
 
 /* ===== Endpoints de salud ===== */
 app.get('/ping', (_req: Request, res: Response) =>
@@ -59,16 +61,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-/* ===== Levantar servidor (con health-check simple de BD) ===== */
+/* ===== Levantar servidor (con health-check de BD) ===== */
 const PORT = Number(process.env.PORT || 3000);
 
 (async () => {
   try {
-    await pool.query('SELECT 1'); // health-check
-    console.log(`✅ Conexión a PostgreSQL (DB: ${process.env.DB_NAME} ) exitosa.`);
-    app.listen(PORT, () => {
-      console.log(`✅ Servidor listo en http://localhost:${PORT}`);
-    });
+    await pool.query('SELECT 1');              // ✅ health-check directo
+    console.log(`✅ Conexión a PostgreSQL (DB: ${process.env.DB_NAME}) exitosa.`);
+    app.listen(PORT, () => console.log(`✅ Servidor listo en http://localhost:${PORT}`));
   } catch (err) {
     console.error('❌ No se pudo verificar la DB al iniciar:', err);
     process.exit(1);
