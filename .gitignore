@@ -13,3 +13,15 @@ desktop.ini
 
 # Git backups
 .git_bak_*/
+
+# Dependencias
+node_modules/
+
+# Archivos de entorno
+.env
+
+# Archivos temporales
+dist/
+build/
+.DS_Store
+Thumbs.db
