@@ -11,33 +11,27 @@ const toPublicUser = (u: any) => {
   return rest;
 };
 
-// helper: ¿es AdminFinca del id_finca?
-async function esAdminDeFinca(
-  client: any,
-  id_usuario: number,
-  id_finca: number
-): Promise<boolean> {
-  const r = await client.query(
+// helper: ¿es AdminFinca del id_finca? (usa pool.query directamente)
+async function esAdminDeFinca(id_usuario: number, id_finca: number): Promise<boolean> {
+  const r = await pool.query(
     `SELECT 1
        FROM usuario_finca_roles
       WHERE id_usuario = $1 AND id_finca = $2 AND rol = 'AdminFinca'
       LIMIT 1`,
     [id_usuario, id_finca]
   );
-  return r.rowCount > 0;
+  return (r.rowCount ?? 0) > 0;
 }
 
 /* =========================================================
-   REGISTRO (versión completa con reglas de rol_global y asignación)
+   REGISTRO (sin pool.connect; compatible con tu db.ts)
 ========================================================= */
 export const registrar = async (req: Request, res: Response, next: NextFunction) => {
-  const client = await pool.connect();
   try {
     const actor = (req as any).user || null; // puede venir vacío
     const data = registroExtendidoSchema.parse(req.body);
     const passHash = await hashPassword(data.contrasena);
 
-    // Reglas:
     // 1) Sólo un SuperAdmin puede crear OTRO SuperAdmin.
     if (data.rol_global === 'SuperAdmin') {
       if (!actor || actor.rol !== 'SuperAdmin') {
@@ -52,7 +46,7 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
       if (!actor) return next({ statusCode: 401, message: 'Token requerido' });
 
       if (actor.rol !== 'SuperAdmin') {
-        const ok = await esAdminDeFinca(client, actor.id_usuario, data.asignacion.id_finca);
+        const ok = await esAdminDeFinca(actor.id_usuario, data.asignacion.id_finca);
         if (!ok) {
           return next({
             statusCode: 403,
@@ -63,12 +57,10 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
       }
     }
 
-    await client.query('BEGIN');
-
     // 3) Insertar usuario con rol global ('Usuario' o 'SuperAdmin')
     const rolGlobal = data.rol_global === 'SuperAdmin' ? 'SuperAdmin' : 'Usuario';
 
-    const insUser = await client.query(
+    const insUser = await pool.query(
       `INSERT INTO usuarios (nombre_usuario, correo_electronico, contrasena, rol, nombre_completo)
        VALUES ($1,$2,$3,$4,$5)
        RETURNING id_usuario, nombre_usuario, correo_electronico, rol, nombre_completo;`,
@@ -85,7 +77,7 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
 
     // 4) Asignación opcional por-finca
     if (data.asignacion) {
-      await client.query(
+      await pool.query(
         `INSERT INTO usuario_finca_roles (id_usuario, id_finca, rol)
          VALUES ($1, $2, $3)
          ON CONFLICT DO NOTHING`,
@@ -93,22 +85,17 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
       );
     }
 
-    await client.query('COMMIT');
-
     res.status(201).json({
       ok: true,
       usuario,
       ...(data.asignacion ? { asignacion: data.asignacion } : {}),
     });
   } catch (e: any) {
-    await client.query('ROLLBACK');
     if (e?.code === '23505') {
       return next({ statusCode: 409, message: 'Usuario o correo ya registrado', detalle: e.detail });
     }
     if (e?.issues) return next({ statusCode: 400, message: 'Datos inválidos', issues: e.issues });
     next(e);
-  } finally {
-    client.release();
   }
 };
 
@@ -147,7 +134,7 @@ export const refreshTokens = async (req: Request, res: Response, next: NextFunct
     const { refreshToken } = req.body;
     if (!refreshToken) return next({ statusCode: 400, message: 'Falta refreshToken' });
 
-    const payload = verifyAccessToken(refreshToken); // puedes usar verifyRefreshToken si tienes una función separada
+    const payload = verifyAccessToken(refreshToken); // o verifyRefreshToken si lo tienes
     const newAccess = signAccessToken(payload);
     const newRefresh = signRefreshToken(payload);
 
