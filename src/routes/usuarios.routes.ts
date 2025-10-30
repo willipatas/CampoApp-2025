@@ -24,6 +24,9 @@ router.get('/me', getMiPerfil);
 router.patch('/me', actualizarMiPerfil);
 router.patch('/me/password', cambiarMiContrasena);
 
+// ⚠️ Solo SuperAdmin puede ver a TODOS los usuarios
+router.get('/', requireRole('SuperAdmin'), listarUsuarios);
+
 // Listado y administración (permite Administrador **o** SuperAdmin)
 // Si tu requireRole actual no acepta arrays, ver “Paso 2”
 router.get('/', requireRole('Administrador'), listarUsuarios);

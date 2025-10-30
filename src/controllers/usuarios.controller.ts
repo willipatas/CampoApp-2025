@@ -19,22 +19,55 @@ const toPublicUser = (u: any) => {
 /** GET /api/usuarios/me */
 export const getMiPerfil = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // 1. Obtenemos el ID del usuario desde el token (usando req.user)
     const userFromToken = (req as any).user as { id_usuario: number };
-    const q = `
+
+    // --- INICIO DE LA MODIFICACIÓN ---
+
+    // 2. Preparamos ambas consultas
+    
+    // Consulta 1: Datos del usuario (la que ya tenías)
+    const qUsuario = `
       SELECT id_usuario, nombre_usuario, correo_electronico, rol, nombre_completo
       FROM usuarios
       WHERE id_usuario = $1
       LIMIT 1;
     `;
-    const result = await pool.query(q, [userFromToken.id_usuario]);
-    if (result.rowCount === 0) return next({ statusCode: 404, message: 'Usuario no encontrado' });
-    res.json({ ok: true, usuario: toPublicUser(result.rows[0]) });
+    const pUsuario = pool.query(qUsuario, [userFromToken.id_usuario]);
+
+    // Consulta 2: Fincas a las que pertenece el usuario
+    const qFincas = `
+      SELECT f.id_finca, f.nombre_finca, ufr.rol AS rol_en_finca
+      FROM usuario_finca_roles ufr
+      JOIN fincas f ON f.id_finca = ufr.id_finca
+      WHERE ufr.id_usuario = $1
+      ORDER BY f.nombre_finca;
+    `;
+    const pFincas = pool.query(qFincas, [userFromToken.id_usuario]);
+
+    // 3. Ejecutamos las dos consultas en paralelo
+    const [resultUsuario, resultFincas] = await Promise.all([pUsuario, pFincas]);
+
+    // 4. Verificamos que el usuario exista
+    if (resultUsuario.rowCount === 0) {
+      return next({ statusCode: 404, message: 'Usuario no encontrado' });
+    }
+
+    // 5. Devolvemos la respuesta combinada
+    res.json({
+      ok: true,
+      usuario: toPublicUser(resultUsuario.rows[0]),
+      fincas: resultFincas.rows, // <-- Aquí está la nueva información
+    });
+    
+    // --- FIN DE LA MODIFICACIÓN ---
+
   } catch (e) {
     next(e);
   }
 };
 
-/** GET /api/usuarios (solo Administrador) */
+// GET /api/usuarios  -> ahora solo SuperAdmin (validado en ruta)
 export const listarUsuarios = async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const q = `
@@ -43,7 +76,7 @@ export const listarUsuarios = async (_req: Request, res: Response, next: NextFun
       ORDER BY id_usuario ASC;
     `;
     const result = await pool.query(q);
-    res.json({ ok: true, usuarios: result.rows.map(toPublicUser) });
+    res.json({ ok: true, usuarios: result.rows });
   } catch (e) {
     next(e);
   }
@@ -157,13 +190,67 @@ export const actualizarUsuarioAdmin = async (req: Request, res: Response, next: 
   }
 };
 
-/** DELETE /api/usuarios/:id (Admin) */
+/**
+ * DELETE /api/usuarios/:id
+ * Reglas:
+ *  - SuperAdmin: puede eliminar a cualquiera, pero NO a SuperAdmin (entre sí no se eliminan).
+ *  - AdminFinca: solo usuarios de SU finca y NO SuperAdmin.
+ */
 export const eliminarUsuario = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const id = Number(req.params.id);
-    const r = await pool.query('DELETE FROM usuarios WHERE id_usuario = $1', [id]);
-    if (r.rowCount === 0) return next({ statusCode: 404, message: 'Usuario no encontrado' });
-    res.json({ ok: true, mensaje: 'Usuario eliminado' });
+    const targetId = Number(req.params.id);
+    const authUser = (req as any).user;
+
+    if (!authUser) return next({ statusCode: 401, message: 'Token requerido' });
+    if (!targetId || Number.isNaN(targetId)) return next({ statusCode: 400, message: 'ID inválido' });
+
+    // Traemos rol del objetivo
+    const rU = await pool.query(
+      `SELECT id_usuario, rol FROM usuarios WHERE id_usuario = $1 LIMIT 1`,
+      [targetId]
+    );
+    if (rU.rowCount === 0) return next({ statusCode: 404, message: 'Usuario no encontrado' });
+
+    const objetivoRol: string = rU.rows[0].rol;
+
+    // 1) SuperAdmin
+    if (authUser.rol === 'SuperAdmin') {
+      if (objetivoRol === 'SuperAdmin') {
+        return next({ statusCode: 403, message: 'Los SuperAdmin no pueden eliminar a otros SuperAdmin' });
+      }
+      await pool.query('DELETE FROM usuarios WHERE id_usuario = $1', [targetId]);
+      return res.json({ ok: true, mensaje: 'Usuario eliminado (SuperAdmin)' });
+    }
+
+    // 2) AdminFinca: solo si el objetivo pertenece a alguna finca donde el admin también sea AdminFinca
+    //    y el objetivo NO es SuperAdmin
+    if (objetivoRol === 'SuperAdmin') {
+      return next({ statusCode: 403, message: 'No puede eliminar un SuperAdmin' });
+    }
+
+    // ¿comparten una finca donde authUser es AdminFinca?
+    const rShare = await pool.query(
+      `
+      SELECT 1
+      FROM usuario_finca_roles u1
+      JOIN usuario_finca_roles u2
+        ON u1.id_finca = u2.id_finca
+      WHERE u1.id_usuario = $1 AND u1.rol = 'AdminFinca'
+        AND u2.id_usuario = $2
+      LIMIT 1
+      `,
+      [authUser.id_usuario, targetId]
+    );
+
+    if (rShare.rowCount === 0) {
+      return next({
+        statusCode: 403,
+        message: 'Solo puede eliminar usuarios de sus fincas (y nunca SuperAdmin)',
+      });
+    }
+
+    await pool.query('DELETE FROM usuarios WHERE id_usuario = $1', [targetId]);
+    return res.json({ ok: true, mensaje: 'Usuario eliminado' });
   } catch (e: any) {
     if (e?.code === '23503') {
       return next({ statusCode: 409, message: 'No se puede eliminar: tiene datos relacionados', detalle: e?.detail });

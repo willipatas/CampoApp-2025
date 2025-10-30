@@ -167,3 +167,219 @@ export const eliminarFinca = async (req: Request, res: Response, next: NextFunct
     next(e);
   }
 };
+
+/* =========================================================
+   REGISTROS MÉDICOS POR FINCA
+========================================================= */
+
+/**
+ * GET /api/fincas/:id/eventos
+ * Lista todos los registros médicos de TODOS los semovientes de una finca.
+ * Permisos: SuperAdmin o Miembro de la finca.
+ */
+export const listarEventosPorFinca = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id_finca = Number(req.params.id);
+    if (!id_finca) return next({ statusCode: 400, message: 'ID de finca inválido' });
+
+    // Respetamos la convención req.user
+    const user = (req as any).user; 
+    if (!user) return next({ statusCode: 401, message: 'Token requerido' });
+
+    // 1. Verificar Permisos (SuperAdmin o Miembro de la finca)
+    if (user.rol !== 'SuperAdmin') {
+      const rPermiso = await pool.query(
+        `SELECT 1 FROM usuario_finca_roles WHERE id_finca = $1 AND id_usuario = $2 LIMIT 1`,
+        [id_finca, user.id_usuario]
+      );
+      if (rPermiso.rowCount === 0) {
+        // Si no es miembro, no puede ver los eventos
+        return next({ statusCode: 403, message: 'Acceso prohibido a esta finca' });
+      }
+    }
+
+    // 2. Obtener los registros médicos de todos los semovientes de esa finca
+    const q = `
+      SELECT rm.*, s.nombre AS nombre_semoviente, s.nro_marca
+      FROM registros_medicos rm
+      JOIN semovientes s ON s.id_semoviente = rm.id_semoviente
+      WHERE s.id_finca = $1
+      ORDER BY rm.fecha_consulta DESC, rm.id_registro_medico DESC;
+    `;
+    
+    const rEventos = await pool.query(q, [id_finca]);
+
+    res.json({ ok: true, registros: rEventos.rows });
+
+  } catch (e) {
+    next(e);
+  }
+};
+
+/* =========================================================
+   REPORTE DE INVENTARIO
+========================================================= */
+
+/**
+ * GET /api/fincas/:id/reportes/inventario
+ * Devuelve un resumen del inventario de semovientes de una finca.
+ * Permisos: SuperAdmin o Miembro de la finca.
+ */
+export const reporteInventarioFinca = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id_finca = Number(req.params.id);
+    if (!id_finca) return next({ statusCode: 400, message: 'ID de finca inválido' });
+
+    // Respetamos la convención req.user
+    const user = (req as any).user;
+    if (!user) return next({ statusCode: 401, message: 'Token requerido' });
+
+    // 1. Verificar Permisos (SuperAdmin o Miembro de la finca)
+    // Usamos los helpers que ya existen en este archivo
+    if (!isSuperAdmin(req)) { 
+      const miembro = await pool.query(
+        `SELECT 1 FROM usuario_finca_roles WHERE id_finca = $1 AND id_usuario = $2 LIMIT 1`,
+        [id_finca, userId(req)] // userId(req) es un helper de este archivo
+      );
+      if (miembro.rowCount === 0) {
+        return next({ statusCode: 403, message: 'Acceso prohibido a esta finca' });
+      }
+    }
+
+    // 2. Definir las consultas del reporte
+    const qTotal = `SELECT COUNT(*) AS total_semovientes FROM semovientes WHERE id_finca = $1`;
+    
+    const qEstado = `SELECT estado, COUNT(*) AS total FROM semovientes WHERE id_finca = $1 GROUP BY estado`;
+    
+    // Asumo que tu tabla de especies se llama 'especies' y la columna 'nombre_especie'
+    const qEspecie = `
+      SELECT e.nombre_especie, COUNT(s.id_semoviente) AS total
+      FROM semovientes s
+      JOIN especies e ON s.id_especie = e.id_especie
+      WHERE s.id_finca = $1
+      GROUP BY e.nombre_especie`;
+      
+    const qSexo = `SELECT sexo, COUNT(*) AS total FROM semovientes WHERE id_finca = $1 GROUP BY sexo`;
+
+    // 3. Ejecutar todo en paralelo
+    const [
+      resTotal,
+      resEstado,
+      resEspecie,
+      resSexo
+    ] = await Promise.all([
+      pool.query(qTotal, [id_finca]),
+      pool.query(qEstado, [id_finca]),
+      pool.query(qEspecie, [id_finca]),
+      pool.query(qSexo, [id_finca]),
+    ]);
+
+    // 4. Formatear la respuesta
+    // Helper para convertir [{estado: 'Activo', total: 10}, ...] en {Activo: 10, ...}
+    const arrayToObject = (arr: any[], keyField: string) => 
+      arr.reduce((acc, item) => {
+        acc[item[keyField]] = parseInt(item.total, 10);
+        return acc;
+      }, {});
+
+    const reporte = {
+      total_semovientes: parseInt(resTotal.rows[0].total_semovientes, 10),
+      desglose_estado: arrayToObject(resEstado.rows, 'estado'),
+      desglose_especie: arrayToObject(resEspecie.rows, 'nombre_especie'),
+      desglose_sexo: arrayToObject(resSexo.rows, 'sexo'),
+    };
+
+    res.json({ ok: true, reporte });
+
+  } catch (e) {
+    next(e);
+  }
+};
+
+/* =========================================================
+   FUNCIÓN: REPORTE SANITARIO (PRÓXIMOS EVENTOS)
+========================================================= */
+
+/**
+ * GET /api/fincas/:id/reportes/sanitario
+ * Devuelve una lista de registros médicos (vacunas, etc.) con
+ * una 'proxima_fecha' programada.
+ * Acepta un query param "?dias=90" (default: 30)
+ * Permisos: SuperAdmin o Miembro de la finca.
+ */
+export const reporteSanitarioFinca = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id_finca = Number(req.params.id);
+    if (!id_finca) return next({ statusCode: 400, message: 'ID de finca inválido' });
+
+    // ----- INICIO DE LA MODIFICACIÓN -----
+    
+    // 1. Leer el query param 'dias'. Si no viene, el default es 30.
+    const dias = Number(req.query.dias) || 30;
+
+    // Validar que sea un número razonable (ej. no más de 5 años)
+    if (Number.isNaN(dias) || dias <= 0 || dias > 1825) {
+      return next({ statusCode: 400, message: 'El parámetro "dias" debe ser un número válido entre 1 y 1825' });
+    }
+    
+    // Convertir los días a un string de intervalo para SQL (ej: '90 days')
+    const intervalo = `${dias} days`;
+
+    // ----- FIN DE LA MODIFICACIÓN -----
+
+
+    // Respetamos la convención req.user
+    const user = (req as any).user;
+    if (!user) return next({ statusCode: 401, message: 'Token requerido' });
+
+    // 2. Verificar Permisos (SuperAdmin o Miembro de la finca)
+    if (!isSuperAdmin(req)) { 
+      const miembro = await pool.query(
+        `SELECT 1 FROM usuario_finca_roles WHERE id_finca = $1 AND id_usuario = $2 LIMIT 1`,
+        [id_finca, userId(req)]
+      );
+      if (miembro.rowCount === 0) {
+        return next({ statusCode: 403, message: 'Acceso prohibido a esta finca' });
+      }
+    }
+
+    // 3. Definir la consulta del reporte (AHORA ES DINÁMICA)
+    // Usamos $2::INTERVAL para pasar el intervalo de forma segura
+    const q = `
+      SELECT 
+        rm.id_registro_medico,
+        rm.proxima_fecha,
+        rm.tipo_evento_medico,
+        rm.nombre_vacuna,
+        rm.dosis,
+        rm.observaciones,
+        s.id_semoviente,
+        s.nombre AS nombre_semoviente,
+        s.nro_marca
+      FROM registros_medicos rm
+      JOIN semovientes s ON s.id_semoviente = rm.id_semoviente
+      WHERE 
+        s.id_finca = $1
+        AND rm.proxima_fecha IS NOT NULL
+        AND rm.proxima_fecha BETWEEN NOW() AND (NOW() + $2::INTERVAL) -- <-- Cambio aquí
+      ORDER BY 
+        rm.proxima_fecha ASC;
+    `;
+
+    // 4. Ejecutar consulta (pasando el intervalo como $2)
+    const resEventos = await pool.query(q, [id_finca, intervalo]); // <-- Cambio aquí
+
+    // 5. Devolver respuesta
+    res.json({ 
+      ok: true, 
+      reporte: {
+        dias_consulta: dias, // <-- Añadido para confirmar el rango
+        proximos_eventos: resEventos.rows,
+        total_encontrado: resEventos.rowCount
+      }
+    });
+
+  } catch (e) {
+    next(e);
+  }
+};

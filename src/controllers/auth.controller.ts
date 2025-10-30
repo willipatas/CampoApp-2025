@@ -40,26 +40,23 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
     }
 
     // 2) Si se pide asignación a finca:
-    //    - SuperAdmin: puede asignar en cualquier finca con cualquier rol_finca
+    //    - SuperAdmin: puede asignar en cualquier finca
     //    - NO SuperAdmin: debe estar autenticado y ser AdminFinca de ESA finca
     if (data.asignacion) {
-      if (!actor) return next({ statusCode: 401, message: 'Token requerido' });
+      if (!actor) return next({ statusCode: 401, message: 'Token requerido para asignar finca' });
 
       if (actor.rol !== 'SuperAdmin') {
         const ok = await esAdminDeFinca(actor.id_usuario, data.asignacion.id_finca);
         if (!ok) {
           return next({
             statusCode: 403,
-            message:
-              'Sólo AdminFinca de esa finca (o SuperAdmin) puede asignar miembros a la finca',
+            message: 'Sólo AdminFinca de esa finca (o SuperAdmin) puede asignar miembros',
           });
         }
       }
     }
 
-    // 3) Insertar usuario con rol global ('Usuario' o 'SuperAdmin')
-    const rolGlobal = data.rol_global === 'SuperAdmin' ? 'SuperAdmin' : 'Usuario';
-
+    // 3) Insertar usuario (el rol ya viene validado como 'SuperAdmin' o 'Usuario')
     const insUser = await pool.query(
       `INSERT INTO usuarios (nombre_usuario, correo_electronico, contrasena, rol, nombre_completo)
        VALUES ($1,$2,$3,$4,$5)
@@ -68,7 +65,7 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
         data.nombre_usuario,
         data.correo_electronico,
         passHash,
-        rolGlobal, // 'Usuario' o 'SuperAdmin'
+        data.rol_global, // 'Usuario' o 'SuperAdmin' (del esquema)
         data.nombre_completo,
       ]
     );
@@ -87,7 +84,7 @@ export const registrar = async (req: Request, res: Response, next: NextFunction)
 
     res.status(201).json({
       ok: true,
-      usuario,
+      usuario: toPublicUser(usuario), // Asegúrate que toPublicUser esté definida
       ...(data.asignacion ? { asignacion: data.asignacion } : {}),
     });
   } catch (e: any) {
