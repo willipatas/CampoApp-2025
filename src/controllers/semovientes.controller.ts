@@ -8,7 +8,6 @@ import {
   cambiarEstadoSemovienteSchema,
 } from '../schemas/semoviente.schema';
 
-// --- NUEVO IMPORT DE ESQUEMAS ---
 import {
   crearRegistroMedicoSchema,
   actualizarRegistroMedicoSchema,
@@ -41,8 +40,6 @@ const esAdminDeFinca = async (id_usuario: number, id_finca: number): Promise<boo
   return (r.rowCount ?? 0) > 0;
 };
 
-// --- NUEVO HELPER DE PERMISOS ---
-// Verifica si es AdminFinca, Empleado o Veterinario
 const puedeEscribirRegistros = async (id_usuario: number, id_finca: number): Promise<boolean> => {
   const r: QueryResult = await pool.query(
     `SELECT 1 FROM usuario_finca_roles
@@ -54,7 +51,6 @@ const puedeEscribirRegistros = async (id_usuario: number, id_finca: number): Pro
   );
   return (r.rowCount ?? 0) > 0;
 };
-// ---------------------------------
 
 const validarRazaEspecie = async (id_raza: number, id_especie: number): Promise<boolean> => {
   const r: QueryResult = await pool.query(
@@ -95,28 +91,23 @@ export const crearSemoviente = async (req: Request, res: Response, next: NextFun
     const user = (req as any).user as { id_usuario: number };
     if (!user) return next({ statusCode: 401, message: 'Token requerido' });
 
-    // 1. Usar el nuevo esquema (que incluye tipo_ingreso, valor_compra, etc.)
     const data = crearSemovienteSchema.parse(req.body);
 
-    // 2. Permiso (solo AdminFinca de la finca destino)
     const admin = await esAdminDeFinca(user.id_usuario, data.id_finca);
     if (!admin) return next({ statusCode: 403, message: 'No autorizado: requiere AdminFinca' });
 
-    // 3. Validar Raza/Especie
     const okRaza = await validarRazaEspecie(data.id_raza, data.id_especie);
     if (!okRaza) return next({ statusCode: 400, message: 'La raza no pertenece a esa especie' });
 
-    // 4. Determinar la fecha de ingreso (Nacimiento vs Compra)
     const fechaIngreso = (data.tipo_ingreso === 'Compra' && data.fecha_ingreso) 
       ? data.fecha_ingreso 
-      : data.fecha_nacimiento; // Si es Nacimiento, fecha_ingreso = fecha_nacimiento
+      : data.fecha_nacimiento;
 
-    // 5. Insertar el semoviente
     const r = await pool.query(
       `INSERT INTO semovientes
          (nro_marca, nro_registro, nombre, fecha_nacimiento, sexo,
           id_raza, id_especie, id_madre, id_padre, id_finca, estado,
-          fecha_ingreso, peso_actual, fecha_peso) -- Añadimos fecha_ingreso
+          fecha_ingreso, peso_actual, fecha_peso)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Activo', $11, NULL, NULL)
        RETURNING *`,
       [
@@ -129,8 +120,7 @@ export const crearSemoviente = async (req: Request, res: Response, next: NextFun
 
     const semovienteCreado = r.rows[0];
 
-    // 6. Crear el primer movimiento (Nacimiento o Compra) en la tabla de movimientos
-    const tipoMovimiento = data.tipo_ingreso; // 'Nacimiento' o 'Compra'
+    const tipoMovimiento = data.tipo_ingreso;
     const valorMovimiento = (data.tipo_ingreso === 'Compra') ? data.valor_compra : null;
     const obs = (data.tipo_ingreso === 'Compra') ? 'Registro de Compra' : 'Registro de Nacimiento';
 
@@ -139,12 +129,12 @@ export const crearSemoviente = async (req: Request, res: Response, next: NextFun
         (id_semoviente, tipo_movimiento, fecha_movimiento, finca_destino_id, observaciones, valor)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [
-        semovienteCreado.id_semoviente, // ID del animal que acabamos de crear
-        tipoMovimiento,                // 'Nacimiento' o 'Compra'
-        fechaIngreso,                  // La fecha del evento
-        data.id_finca,                 // Finca destino
-        obs,                           // Observación
-        valorMovimiento                // El valor (precio)
+        semovienteCreado.id_semoviente,
+        tipoMovimiento,
+        fechaIngreso,
+        data.id_finca,
+        obs,
+        valorMovimiento
       ]
     );
 
@@ -195,30 +185,7 @@ export const actualizarSemoviente = async (req: Request, res: Response, next: Ne
   }
 };
 
-export const eliminarSemoviente = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = Number(req.params.id);
-    if (!id || Number.isNaN(id)) return next({ statusCode: 400, message: 'ID inválido' });
-    const rSel = await pool.query(`SELECT id_finca FROM semovientes WHERE id_semoviente = $1`, [id]);
-    if (rSel.rowCount === 0) return next({ statusCode: 404, message: 'Semoviente no encontrado' });
-    const id_finca = rSel.rows[0].id_finca as number;
-    const user = (req as any).user as { id_usuario: number };
-    const admin = await esAdminDeFinca(user.id_usuario, id_finca);
-    if (!admin) return next({ statusCode: 403, message: 'No autorizado: requiere AdminFinca' });
-    const rDel = await pool.query(`DELETE FROM semovientes WHERE id_semoviente = $1`, [id]);
-    if (rDel.rowCount === 0) return next({ statusCode: 404, message: 'Semoviente no encontrado' });
-    res.json({ ok: true, mensaje: 'Eliminado' });
-  } catch (e: any) {
-    if (e?.code === '23503') {
-      return next({
-        statusCode: 409,
-        message: 'No se puede eliminar: existen datos relacionados (vacunas, movimientos, registros médicos o descendencia)',
-        detalle: e?.detail,
-      });
-    }
-    next(e);
-  }
-};
+// --- FUNCIÓN eliminarSemoviente ELIMINADA ---
 
 export const cambiarEstadoSemoviente = async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -291,10 +258,6 @@ export const obtenerSemoviente = async (req: Request, res: Response, next: NextF
    NUEVAS FUNCIONES: REGISTROS MÉDICOS (/eventos)
 ========================================================= */
 
-/**
- * Helper: Busca la finca de un semoviente y verifica permisos.
- * Devuelve el id_finca si tiene éxito, o llama a next() con error si falla.
- */
 const verificarPermisoSemoviente = async (
   req: Request,
   id_semoviente: number,
@@ -302,17 +265,14 @@ const verificarPermisoSemoviente = async (
 ): Promise<number | null> => {
   
   const user = (req as any).user as { id_usuario: number; rol: string };
-  if (!user) return null; // El middleware ya debería atrapar esto
+  if (!user) return null;
 
-  // SuperAdmin siempre tiene acceso
   if (user.rol === 'SuperAdmin') {
-    // Solo necesitamos saber si el semoviente existe
     const rSem = await pool.query('SELECT id_finca FROM semovientes WHERE id_semoviente = $1 LIMIT 1', [id_semoviente]);
     if (rSem.rowCount === 0) return null;
     return rSem.rows[0].id_finca;
   }
 
-  // Usuario normal: verificar permisos de finca
   const rSem = await pool.query('SELECT id_finca FROM semovientes WHERE id_semoviente = $1 LIMIT 1', [id_semoviente]);
   if (rSem.rowCount === 0) return null;
   const id_finca = rSem.rows[0].id_finca;
@@ -330,16 +290,10 @@ const verificarPermisoSemoviente = async (
 };
 
 
-/**
- * GET /api/semovientes/:id/eventos
- * Lista todos los registros médicos de un semoviente.
- * Permisos: SuperAdmin o Miembro de la finca.
- */
 export const listarRegistrosMedicos = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id_semoviente = Number(req.params.id);
 
-    // Verificar permisos de LECTURA
     const id_finca = await verificarPermisoSemoviente(req, id_semoviente, 'lectura');
     if (!id_finca) {
       return next({ statusCode: 403, message: 'Acceso prohibido a este semoviente' });
@@ -358,17 +312,11 @@ export const listarRegistrosMedicos = async (req: Request, res: Response, next: 
   }
 };
 
-/**
- * POST /api/semovientes/:id/eventos
- * Crea un nuevo registro médico para un semoviente.
- * Permisos: SuperAdmin, AdminFinca, Empleado, Veterinario.
- */
 export const crearRegistroMedico = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id_semoviente = Number(req.params.id);
     const data = crearRegistroMedicoSchema.parse(req.body);
 
-    // Verificar permisos de ESCRITURA
     const id_finca = await verificarPermisoSemoviente(req, id_semoviente, 'escritura');
     if (!id_finca) {
       return next({ statusCode: 403, message: 'No autorizado para crear registros en esta finca' });
@@ -401,18 +349,12 @@ export const crearRegistroMedico = async (req: Request, res: Response, next: Nex
   }
 };
 
-/**
- * PATCH /api/semovientes/:id/eventos/:idRegistro
- * Actualiza un registro médico.
- * Permisos: SuperAdmin, AdminFinca, Empleado, Veterinario.
- */
 export const actualizarRegistroMedico = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id_semoviente = Number(req.params.id);
     const id_registro = Number(req.params.idRegistro);
     const data = actualizarRegistroMedicoSchema.parse(req.body);
 
-    // Verificar permisos de ESCRITURA
     const id_finca = await verificarPermisoSemoviente(req, id_semoviente, 'escritura');
     if (!id_finca) {
       return next({ statusCode: 403, message: 'No autorizado para editar registros en esta finca' });
@@ -448,48 +390,12 @@ export const actualizarRegistroMedico = async (req: Request, res: Response, next
   }
 };
 
-/**
- * DELETE /api/semovientes/:id/eventos/:idRegistro
- * Elimina un registro médico.
- * Permisos: SuperAdmin o AdminFinca.
- */
-export const eliminarRegistroMedico = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id_semoviente = Number(req.params.id);
-    const id_registro = Number(req.params.idRegistro);
-
-    // Verificar permisos de ADMIN (solo AdminFinca puede borrar)
-    const id_finca = await verificarPermisoSemoviente(req, id_semoviente, 'admin');
-    if (!id_finca) {
-      return next({ statusCode: 403, message: 'No autorizado para eliminar registros en esta finca (requiere AdminFinca)' });
-    }
-
-    const r = await pool.query(
-      `DELETE FROM registros_medicos
-       WHERE id_semoviente = $1 AND id_registro_medico = $2`,
-      [id_semoviente, id_registro]
-    );
-
-    if (r.rowCount === 0) {
-      return next({ statusCode: 404, message: 'Registro médico no encontrado o no pertenece a este semoviente' });
-    }
-    
-    res.json({ ok: true, mensaje: 'Registro médico eliminado' });
-  } catch (e: any) {
-    next(e);
-  }
-};
+// --- FUNCIÓN eliminarRegistroMedico ELIMINADA ---
 
 /* =========================================================
   FUNCIÓN: FICHA COMPLETA DE SEMOVIENTE
 ========================================================= */
 
-/**
- * GET /api/semovientes/:id/ficha-completa
- * Devuelve el expediente completo de un semoviente, incluyendo
- * sus datos, historial médico y historial de movimientos.
- * Permisos: SuperAdmin o Miembro de la finca.
- */
 export const getFichaCompletaSemoviente = async (
   req: Request,
   res: Response,
@@ -502,12 +408,10 @@ export const getFichaCompletaSemoviente = async (
     }
 
     // @ts-ignore
-    // Respetamos la convención req.user
     const { id_usuario: usuarioId, rol: usuarioRol } = req.user;
 
     // --- 1. Consultas en Paralelo ---
 
-    // Consulta 1: Datos principales del semoviente
     const qDatos = `
       SELECT s.*, e.nombre_especie, r.nombre_raza
       FROM semovientes s
@@ -517,7 +421,6 @@ export const getFichaCompletaSemoviente = async (
     `;
     const pDatos = pool.query(qDatos, [semovienteId]);
 
-    // Consulta 2: Historial de registros médicos (eventos)
     const qMedicos = `
       SELECT * FROM registros_medicos
       WHERE id_semoviente = $1
@@ -525,7 +428,6 @@ export const getFichaCompletaSemoviente = async (
     `;
     const pMedicos = pool.query(qMedicos, [semovienteId]);
 
-    // Consulta 3: Historial de movimientos (traslados, ventas, etc.)
     const qMovimientos = `
       SELECT * FROM movimientos_semovientes
       WHERE id_semoviente = $1
@@ -533,7 +435,6 @@ export const getFichaCompletaSemoviente = async (
     `;
     const pMovimientos = pool.query(qMovimientos, [semovienteId]);
     
-    // Ejecutamos todo junto
     const [resDatos, resMedicos, resMovimientos] = await Promise.all([
       pDatos,
       pMedicos,
@@ -549,7 +450,6 @@ export const getFichaCompletaSemoviente = async (
     const semoviente = resDatos.rows[0];
     const fincaIdDelSemoviente = semoviente.id_finca;
 
-    // Permiso: SuperAdmin
     if (usuarioRol === 'SuperAdmin') {
       return res.json({
         ok: true,
@@ -559,7 +459,6 @@ export const getFichaCompletaSemoviente = async (
       });
     }
 
-    // Permiso: Miembro de la finca (Admin, Empleado, Veterinario)
     const queryPermiso = `
       SELECT rol FROM usuario_finca_roles
       WHERE id_finca = $1 AND id_usuario = $2
@@ -572,7 +471,6 @@ export const getFichaCompletaSemoviente = async (
     
     const rolesPermitidos = ['AdminFinca', 'Empleado', 'Veterinario'];
     if (rolesPermitidos.includes(resPermiso.rows[0].rol)) {
-      // ¡Permiso concedido!
       return res.json({
         ok: true,
         datos: semoviente,
@@ -581,7 +479,6 @@ export const getFichaCompletaSemoviente = async (
       });
     }
 
-    // Si tiene un rol pero no está en la lista (ej. 'Invitado')
     return res.status(403).json({ ok: false, mensaje: 'No tiene permisos suficientes' });
 
   } catch (err) {

@@ -5,13 +5,13 @@ import {
   listarSemovientes,
   crearSemoviente,
   actualizarSemoviente,
-  eliminarSemoviente,
+  // eliminarSemoviente, <-- Eliminado
   cambiarEstadoSemoviente,
   obtenerSemoviente,
   listarRegistrosMedicos,
   crearRegistroMedico,
   actualizarRegistroMedico,
-  eliminarRegistroMedico,
+  // eliminarRegistroMedico, <-- Eliminado
   getFichaCompletaSemoviente
 
 } from '../controllers/semovientes.controller';
@@ -26,14 +26,14 @@ router.get('/:id', obtenerSemoviente);
 router.get('/:id/ficha-completa', getFichaCompletaSemoviente);
 router.post('/', crearSemoviente);
 router.patch('/:id', actualizarSemoviente);
-router.delete('/:id', eliminarSemoviente);
+// router.delete('/:id', eliminarSemoviente); <-- Ruta Eliminada
 router.patch('/:id/estado', cambiarEstadoSemoviente);
 
 // --- RUTAS para Registros Médicos (/eventos) ---
 router.get('/:id/eventos', listarRegistrosMedicos);
 router.post('/:id/eventos', crearRegistroMedico);
 router.patch('/:id/eventos/:idRegistro', actualizarRegistroMedico);
-router.delete('/:id/eventos/:idRegistro', eliminarRegistroMedico);
+// router.delete('/:id/eventos/:idRegistro', eliminarRegistroMedico); <-- Ruta Eliminada
 // -----------------------------------------------------
 
 export default router;
