@@ -19,14 +19,9 @@ const toPublicUser = (u: any) => {
 /** GET /api/usuarios/me */
 export const getMiPerfil = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // 1. Obtenemos el ID del usuario desde el token (usando req.user)
-    const userFromToken = (req as any).user as { id_usuario: number };
-
-    // --- INICIO DE LA MODIFICACIÓN ---
-
-    // 2. Preparamos ambas consultas
     
-    // Consulta 1: Datos del usuario (la que ya tenías)
+    const userFromToken = (req as any).user as { id_usuario: number; rol: string };
+
     const qUsuario = `
       SELECT id_usuario, nombre_usuario, correo_electronico, rol, nombre_completo
       FROM usuarios
@@ -35,33 +30,40 @@ export const getMiPerfil = async (req: Request, res: Response, next: NextFunctio
     `;
     const pUsuario = pool.query(qUsuario, [userFromToken.id_usuario]);
 
-    // Consulta 2: Fincas a las que pertenece el usuario
-    const qFincas = `
-      SELECT f.id_finca, f.nombre_finca, ufr.rol AS rol_en_finca
-      FROM usuario_finca_roles ufr
-      JOIN fincas f ON f.id_finca = ufr.id_finca
-      WHERE ufr.id_usuario = $1
-      ORDER BY f.nombre_finca;
-    `;
-    const pFincas = pool.query(qFincas, [userFromToken.id_usuario]);
+    let pFincas; 
 
-    // 3. Ejecutamos las dos consultas en paralelo
+    if (userFromToken.rol === 'SuperAdmin') {
+      
+      const qFincasSuperAdmin = `
+        SELECT id_finca, nombre_finca, 'SuperAdmin' AS rol_en_finca
+        FROM fincas
+        ORDER BY nombre_finca;
+      `;
+      pFincas = pool.query(qFincasSuperAdmin);
+    } else {
+      
+      const qFincasUsuario = `
+        SELECT f.id_finca, f.nombre_finca, ufr.rol AS rol_en_finca
+        FROM usuario_finca_roles ufr
+        JOIN fincas f ON f.id_finca = ufr.id_finca
+        WHERE ufr.id_usuario = $1
+        ORDER BY f.nombre_finca;
+      `;
+      pFincas = pool.query(qFincasUsuario, [userFromToken.id_usuario]);
+    }
+
     const [resultUsuario, resultFincas] = await Promise.all([pUsuario, pFincas]);
 
-    // 4. Verificamos que el usuario exista
     if (resultUsuario.rowCount === 0) {
       return next({ statusCode: 404, message: 'Usuario no encontrado' });
     }
 
-    // 5. Devolvemos la respuesta combinada
+  
     res.json({
       ok: true,
       usuario: toPublicUser(resultUsuario.rows[0]),
-      fincas: resultFincas.rows, // <-- Aquí está la nueva información
+      fincas: resultFincas.rows, // Esta lista ahora estará llena para el SuperAdmin
     });
-    
-    // --- FIN DE LA MODIFICACIÓN ---
-
   } catch (e) {
     next(e);
   }

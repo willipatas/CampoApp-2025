@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" /> 
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard - CampoApp</title>
+  </head>
+  <body>
+    <div id="login-container" class="container">
+      <h1>CampoApp</h1>
+      <form id="login-form">
+        <input type="text" id="usuario" placeholder="Usuario o Email" required value="admin_wm2">
+        <input type="password" id="contrasena" placeholder="Contraseña" required value="12345678">
+        <button type="submit">Iniciar Sesión</button>
+      </form>
+      <p id="error-message"></p>
+    </div>
+
+    <div id="dashboard-container" class="container hidden">
+      <div id="dashboard-header">
+        <div>
+          <h2 style="text-align: left;">Dashboard</h2>
+          <span id="welcome-user"></span>
+        </div>
+        <button id="logout-button">Cerrar Sesión</button>
+      </div>
+      
+      <form id="finca-form" class="hidden">
+        <label for="finca-selector">Seleccione una Finca:</label>
+        <select id="finca-selector">
+          <option value="">-- Cargando fincas... --</option>
+        </select>
+      </form>
+
+      <div id="dashboard-content" class="report-cards hidden">
+        <div class="card">
+          <div class="card-icon">🐄</div>
+          <h3>Inventario</h3>
+          <p id="total-animales">--</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">💉</div>
+          <h3>Alertas</h3>
+          <p id="alertas-sanitarias">--</p>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
